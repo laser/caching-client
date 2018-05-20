@@ -5,7 +5,8 @@ extern crate reqwest;
 use std::{thread, time::Duration};
 
 pub fn main() -> Result<(), failure::Error> {
-    let client = caching_client::CachingClient::new("simple.rocks", Some(Duration::from_secs(1)))?;
+    let client =
+        caching_client::CachingClient::new("simple.rocks", Some(Duration::from_secs(1)), None)?;
     let req = reqwest::Request::new(reqwest::Method::Get, "https://www.google.com".parse()?);
     let _ = client.send(req)?;
 

@@ -6,6 +6,8 @@ extern crate serde;
 extern crate serde_cbor;
 #[macro_use]
 extern crate serde_derive;
+#[macro_use]
+pub extern crate slog;
 
 use chrono::{offset::Utc, DateTime};
 use failure as f;
@@ -18,6 +20,7 @@ pub struct CachingClient {
     rocksdb: rocksdb::DB,
     http_client: reqwest::Client,
     cache_duration: Option<chrono::Duration>,
+    log: slog::Logger,
 }
 
 // TODO
@@ -31,17 +34,23 @@ struct CachedValue {
 }
 
 impl CachingClient {
-    pub fn new(db_path: &str, cache_duration: Option<Duration>) -> Result<Self, f::Error> {
+    pub fn new(
+        db_path: &str,
+        cache_duration: Option<Duration>,
+        logger: Option<slog::Logger>,
+    ) -> Result<Self, f::Error> {
         let rocksdb = rocksdb::DB::open_default(db_path).context("opening rocksdb")?;
         let cache_duration: Option<chrono::Duration> = match cache_duration {
             Some(duration) => Some(chrono::Duration::from_std(duration)?),
             None => None,
         };
+        let log = logger.unwrap_or_else(|| slog::Logger::root(slog::Discard, o!()));
 
         Ok(CachingClient {
             rocksdb,
             http_client: reqwest::Client::new(),
             cache_duration,
+            log,
         })
     }
 
@@ -73,9 +82,11 @@ impl CachingClient {
 
                 match cached.expires {
                     Some(expires) if expires > Utc::now() => {
+                        trace!(self.log, "reading from cache"; "uri" => &uri);
                         Ok(BufReader::new(Cursor::new(cached.value.to_vec())))
                     }
                     _ => {
+                        trace!(self.log, "expired cache entry, refetching"; "uri" => &uri);
                         let bytes = self.exec(request)?;
                         let bytes = self.store(k, bytes)?;
 
@@ -84,17 +95,12 @@ impl CachingClient {
                 }
             }
             None => {
+                trace!(self.log, "no entry found"; "uri" => &uri);
                 let bytes = self.exec(request)?;
                 let bytes = self.store(k, bytes)?;
 
                 Ok(BufReader::new(Cursor::new(bytes)))
             }
         }
-    }
-}
-
-impl AsRef<reqwest::Client> for CachingClient {
-    fn as_ref(&self) -> &reqwest::Client {
-        &self.http_client
     }
 }
