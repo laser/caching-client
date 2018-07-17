@@ -1,4 +1,5 @@
 extern crate chrono;
+#[macro_use]
 extern crate failure;
 extern crate reqwest;
 extern crate rocksdb;
@@ -33,6 +34,8 @@ struct CachedValue {
     value: Vec<u8>,
 }
 
+type HttpStatus = u16;
+
 impl CachingClient {
     pub fn new(
         db_path: &str,
@@ -54,13 +57,13 @@ impl CachingClient {
         })
     }
 
-    fn exec(&self, request: Request) -> Result<Vec<u8>, f::Error> {
+    fn exec(&self, request: Request) -> Result<(HttpStatus, Vec<u8>), f::Error> {
         let mut response = self.http_client.execute(request)?;
         let mut bytes = Vec::with_capacity(4096);
         response.read_to_end(&mut bytes)?;
         bytes.shrink_to_fit();
 
-        Ok(bytes)
+        Ok((response.status().as_u16(), bytes))
     }
 
     fn store(&self, k: &[u8], value: Vec<u8>) -> Result<Vec<u8>, f::Error> {
@@ -87,19 +90,27 @@ impl CachingClient {
                     }
                     _ => {
                         trace!(self.log, "expired cache entry, refetching"; "uri" => &uri);
-                        let bytes = self.exec(request)?;
-                        let bytes = self.store(k, bytes)?;
-
-                        Ok(BufReader::new(Cursor::new(bytes)))
+                        let (status, bytes) = self.exec(request)?;
+                        let retriable_error = status >= 500;
+                        if !retriable_error {
+                            let bytes = self.store(k, bytes)?;
+                            Ok(BufReader::new(Cursor::new(bytes)))
+                        } else {
+                            Err(format_err!("http status {}", status))
+                        }
                     }
                 }
             }
             None => {
                 trace!(self.log, "no entry found"; "uri" => &uri);
-                let bytes = self.exec(request)?;
-                let bytes = self.store(k, bytes)?;
-
-                Ok(BufReader::new(Cursor::new(bytes)))
+                let (status, bytes) = self.exec(request)?;
+                let retriable_error = status >= 500;
+                if !retriable_error {
+                    let bytes = self.store(k, bytes)?;
+                    Ok(BufReader::new(Cursor::new(bytes)))
+                } else {
+                    Err(format_err!("http status {}", status))
+                }
             }
         }
     }
