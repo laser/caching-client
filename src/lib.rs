@@ -36,6 +36,7 @@ struct CachedValue {
 
 type HttpStatus = u16;
 
+#[derive(PartialEq)]
 pub enum ResultType {
     Cached,
     Fetched,
