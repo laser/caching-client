@@ -36,6 +36,11 @@ struct CachedValue {
 
 type HttpStatus = u16;
 
+pub enum ResultType {
+    Cached,
+    Fetched,
+}
+
 impl CachingClient {
     pub fn new(
         db_path: &str,
@@ -75,7 +80,10 @@ impl CachingClient {
         Ok(cached_val.value)
     }
 
-    pub fn send(&self, request: Request) -> Result<BufReader<Cursor<Vec<u8>>>, f::Error> {
+    pub fn send(
+        &self,
+        request: Request,
+    ) -> Result<(BufReader<Cursor<Vec<u8>>>, ResultType), f::Error> {
         let uri = request.url().as_str().to_owned();
         let k = uri.as_bytes();
         match self.rocksdb.get(k)? {
@@ -86,7 +94,10 @@ impl CachingClient {
                 match cached.expires {
                     Some(expires) if expires > Utc::now() => {
                         trace!(self.log, "reading from cache"; "uri" => &uri);
-                        Ok(BufReader::new(Cursor::new(cached.value.to_vec())))
+                        Ok((
+                            BufReader::new(Cursor::new(cached.value.to_vec())),
+                            ResultType::Cached,
+                        ))
                     }
                     _ => {
                         trace!(self.log, "expired cache entry, refetching"; "uri" => &uri);
@@ -94,7 +105,7 @@ impl CachingClient {
                         let retriable_error = status >= 500;
                         if !retriable_error {
                             let bytes = self.store(k, bytes)?;
-                            Ok(BufReader::new(Cursor::new(bytes)))
+                            Ok((BufReader::new(Cursor::new(bytes)), ResultType::Fetched))
                         } else {
                             Err(format_err!("http status {}", status))
                         }
@@ -107,7 +118,7 @@ impl CachingClient {
                 let retriable_error = status >= 500;
                 if !retriable_error {
                     let bytes = self.store(k, bytes)?;
-                    Ok(BufReader::new(Cursor::new(bytes)))
+                    Ok((BufReader::new(Cursor::new(bytes)), ResultType::Fetched))
                 } else {
                     Err(format_err!("http status {}", status))
                 }
